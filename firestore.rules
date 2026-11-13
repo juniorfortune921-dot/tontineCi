@@ -1,0 +1,84 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(groupId) {
+      return signedIn()
+        && get(/databases/$(database)/documents/groups/$(groupId)).data.ownerId
+          == request.auth.uid;
+    }
+
+    function isMember(groupId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/groups/$(groupId)/members/$(request.auth.uid));
+    }
+
+    function validMember(data, groupId, memberId) {
+      return data.keys().hasAll(['userId', 'groupId', 'joinedAt'])
+        && data.keys().hasOnly(['userId', 'groupId', 'joinedAt'])
+        && data.userId == memberId
+        && data.groupId == groupId;
+    }
+
+    match /users/{userId} {
+      allow get: if signedIn() && request.auth.uid == userId;
+      allow list: if false;
+      allow create, update: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.keys().hasAll(['email', 'displayName', 'createdAt'])
+        && request.resource.data.keys().hasOnly(['email', 'displayName', 'createdAt']);
+      allow delete: if signedIn() && request.auth.uid == userId;
+    }
+
+    match /groups/{groupId} {
+      allow get, list: if isMember(groupId);
+      allow create: if signedIn()
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.keys().hasAll([
+          'name', 'amount', 'currency', 'frequency', 'distributionMode', 'ownerId', 'createdAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'name', 'amount', 'currency', 'frequency', 'distributionMode', 'ownerId', 'createdAt'
+        ])
+        && request.resource.data.distributionMode in ['tirage', 'ordre'];
+      allow update, delete: if isOwner(groupId);
+
+      match /members/{memberId} {
+        allow get, list: if signedIn() && memberId == request.auth.uid;
+        allow create: if signedIn()
+          && validMember(request.resource.data, groupId, memberId)
+          && (isOwner(groupId)
+            || (memberId == request.auth.uid
+              && getAfter(/databases/$(database)/documents/groups/$(groupId)).data.ownerId
+                == request.auth.uid));
+        allow update: if false;
+        allow delete: if isOwner(groupId);
+      }
+
+      match /rounds/{roundId} {
+        allow get, list: if signedIn() && resource.data.recipientId == request.auth.uid;
+        allow create, update, delete: if isOwner(groupId);
+      }
+
+      match /contributions/{contributionId} {
+        allow get, list: if signedIn() && resource.data.memberId == request.auth.uid;
+        allow create: if isMember(groupId)
+          && request.resource.data.memberId == request.auth.uid
+          && request.resource.data.status == 'en_attente';
+        allow update: if isMember(groupId)
+          && resource.data.memberId == request.auth.uid
+          && resource.data.status == 'en_attente'
+          && request.resource.data.status == 'déclaré'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+          || isOwner(groupId)
+            && resource.data.status == 'déclaré'
+            && request.resource.data.status == 'confirmé'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']);
+        allow delete: if isOwner(groupId);
+      }
+    }
+  }
+}
