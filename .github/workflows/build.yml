@@ -29,7 +29,7 @@ jobs:
           cache: true
 
       - name: Generate Android project
-        run: flutter create . --platforms=android --project-name=tontine_ci
+        run: flutter create . --platforms=android --org com.tontineci --project-name tontine_ci
 
       - name: Get dependencies
         run: flutter pub get
