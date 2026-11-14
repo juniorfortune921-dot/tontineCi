@@ -2,8 +2,8 @@ import '../../../core/utils/firestore_converters.dart';
 
 enum ContributionStatus {
   enAttente('en_attente'),
-  declare('déclaré'),
-  confirme('confirmé');
+  declare('declare'),
+  confirme('confirme');
 
   const ContributionStatus(this.value);
   final String value;
