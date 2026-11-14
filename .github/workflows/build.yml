@@ -31,6 +31,137 @@ jobs:
       - name: Generate Android project
         run: flutter create . --platforms=android --org com.tontineci --project-name tontine_ci
 
+      - name: Configure Android release signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          python3 - <<'PY'
+          import base64
+          import binascii
+          import os
+          import re
+          from pathlib import Path
+
+          required = ("KEYSTORE_BASE64", "KEYSTORE_PASSWORD", "KEY_PASSWORD", "KEY_ALIAS")
+          missing = [name for name in required if not os.environ.get(name)]
+          if missing:
+            raise SystemExit("Missing required signing secret(s): " + ", ".join(missing))
+
+          try:
+            keystore = base64.b64decode(os.environ["KEYSTORE_BASE64"], validate=True)
+          except (binascii.Error, ValueError):
+            raise SystemExit("KEYSTORE_BASE64 is not valid base64")
+          if not keystore:
+            raise SystemExit("KEYSTORE_BASE64 decoded to an empty keystore")
+
+          android_dir = Path("android")
+          app_dir = android_dir / "app"
+          keystore_path = app_dir / "tontine-release.jks"
+          keystore_path.write_bytes(keystore)
+          keystore_path.chmod(0o600)
+
+          def escape_property(value):
+            return (value.replace("\\", "\\\\").replace("\n", "\\n")
+                .replace("\r", "\\r").replace("\t", "\\t")
+                .replace(":", "\\:").replace("=", "\\=")
+                .replace("#", "\\#").replace("!", "\\!").replace(" ", "\\ "))
+
+          properties = {
+            "storePassword": os.environ["KEYSTORE_PASSWORD"],
+            "keyPassword": os.environ["KEY_PASSWORD"],
+            "keyAlias": os.environ["KEY_ALIAS"],
+            "storeFile": "tontine-release.jks",
+          }
+          properties_path = android_dir / "key.properties"
+          properties_path.write_text(
+            "".join(f"{key}={escape_property(value)}\n" for key, value in properties.items()),
+            encoding="utf-8",
+          )
+          properties_path.chmod(0o600)
+
+          gradle_file = app_dir / "build.gradle.kts"
+          if not gradle_file.is_file():
+            gradle_file = app_dir / "build.gradle"
+          if not gradle_file.is_file():
+            raise SystemExit("Could not find android/app/build.gradle.kts or build.gradle")
+
+          source = gradle_file.read_text(encoding="utf-8")
+          if gradle_file.name.endswith(".kts"):
+            debug_signing = re.compile(
+              r"(?m)^(\s*)signingConfig\s*=\s*signingConfigs\.getByName\([\"']debug[\"']\)\s*$"
+            )
+            android_block = re.compile(r"(?m)^android\s*\{")
+            build_types = re.compile(r"(?m)^(\s*)buildTypes\s*\{")
+            properties_code = (
+              'val keystoreProperties = java.util.Properties()\n'
+              'val keystorePropertiesFile = rootProject.file("key.properties")\n'
+              'if (!keystorePropertiesFile.isFile) {\n'
+              '    throw GradleException("Missing android/key.properties")\n'
+              '}\n'
+              'keystoreProperties.load(java.io.FileInputStream(keystorePropertiesFile))\n\n'
+            )
+            signing_code = (
+              'signingConfigs {\n'
+              '    create("release") {\n'
+              '        keyAlias = keystoreProperties["keyAlias"] as String\n'
+              '        keyPassword = keystoreProperties["keyPassword"] as String\n'
+              '        storeFile = file(keystoreProperties["storeFile"] as String)\n'
+              '        storePassword = keystoreProperties["storePassword"] as String\n'
+              '    }\n'
+              '}\n\n'
+            )
+            release_signing = 'signingConfig = signingConfigs.getByName("release")'
+          else:
+            debug_signing = re.compile(
+              r"(?m)^(\s*)signingConfig\s+signingConfigs\.debug\s*$"
+            )
+            android_block = re.compile(r"(?m)^android\s*\{")
+            build_types = re.compile(r"(?m)^(\s*)buildTypes\s*\{")
+            properties_code = (
+              "def keystoreProperties = new Properties()\n"
+              "def keystorePropertiesFile = rootProject.file('key.properties')\n"
+              "if (!keystorePropertiesFile.isFile()) {\n"
+              "    throw new GradleException('Missing android/key.properties')\n"
+              "}\n"
+              "keystoreProperties.load(new FileInputStream(keystorePropertiesFile))\n\n"
+            )
+            signing_code = (
+              "signingConfigs {\n"
+              "    release {\n"
+              "        keyAlias keystoreProperties['keyAlias']\n"
+              "        keyPassword keystoreProperties['keyPassword']\n"
+              "        storeFile file(keystoreProperties['storeFile'])\n"
+              "        storePassword keystoreProperties['storePassword']\n"
+              "    }\n"
+              "}\n\n"
+            )
+            release_signing = "signingConfig signingConfigs.release"
+
+          matches = list(debug_signing.finditer(source))
+          android_matches = list(android_block.finditer(source))
+          build_matches = list(build_types.finditer(source))
+          if len(matches) != 1 or len(android_matches) != 1 or len(build_matches) != 1:
+            raise SystemExit(
+              f"Unexpected generated Gradle layout in {gradle_file}: "
+              "expected one Android block, one buildTypes block, and one debug release signing line"
+            )
+
+          line_indent = matches[0].group(1)
+          source = debug_signing.sub(lambda match: line_indent + release_signing, source, count=1)
+          build_match = build_types.search(source)
+          build_indent = build_match.group(1)
+          indented_signing = "\n".join(
+            build_indent + line if line else "" for line in signing_code.rstrip("\n").split("\n")
+          )
+          source = source[:build_match.start()] + indented_signing + "\n\n" + source[build_match.start():]
+          android_match = android_block.search(source)
+          source = source[:android_match.start()] + properties_code + source[android_match.start():]
+          gradle_file.write_text(source, encoding="utf-8")
+          PY
+
       - name: Get dependencies
         run: flutter pub get
 
