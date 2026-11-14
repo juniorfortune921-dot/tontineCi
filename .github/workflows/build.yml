@@ -90,18 +90,31 @@ jobs:
 
           source = gradle_file.read_text(encoding="utf-8")
           if gradle_file.name.endswith(".kts"):
+            kotlin_imports = (
+              "import java.util.Properties\n"
+              "import java.io.FileInputStream\n\n"
+            )
+            source_lines = source.splitlines(keepends=True)
+            source_lines = [
+              line for line in source_lines
+              if line.strip() not in (
+                "import java.util.Properties",
+                "import java.io.FileInputStream",
+              )
+            ]
+            source = kotlin_imports + "".join(source_lines)
             debug_signing = re.compile(
               r"(?m)^(\s*)signingConfig\s*=\s*signingConfigs\.getByName\([\"']debug[\"']\)\s*$"
             )
             android_block = re.compile(r"(?m)^android\s*\{")
             build_types = re.compile(r"(?m)^(\s*)buildTypes\s*\{")
             properties_code = (
-              'val keystoreProperties = java.util.Properties()\n'
+              'val keystoreProperties = Properties()\n'
               'val keystorePropertiesFile = rootProject.file("key.properties")\n'
               'if (!keystorePropertiesFile.isFile) {\n'
               '    throw GradleException("Missing android/key.properties")\n'
               '}\n'
-              'keystoreProperties.load(java.io.FileInputStream(keystorePropertiesFile))\n\n'
+              'keystoreProperties.load(FileInputStream(keystorePropertiesFile))\n\n'
             )
             signing_code = (
               'signingConfigs {\n'
