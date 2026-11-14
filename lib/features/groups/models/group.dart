@@ -1,6 +1,7 @@
 import '../../../core/utils/firestore_converters.dart';
 
 enum GroupFrequency {
+  daily('daily'),
   weekly('weekly'),
   monthly('monthly');
 
@@ -31,6 +32,7 @@ class Group {
     required this.frequency,
     required this.distributionMode,
     required this.ownerId,
+    required this.memberIds,
     required this.createdAt,
   });
 
@@ -41,6 +43,7 @@ class Group {
   final GroupFrequency frequency;
   final DistributionMode distributionMode;
   final String ownerId;
+  final List<String> memberIds;
   final DateTime createdAt;
 
   factory Group.fromMap(String id, Map<String, dynamic> data) => Group(
@@ -53,6 +56,7 @@ class Group {
           data['distributionMode'] as String,
         ),
         ownerId: data['ownerId'] as String,
+        memberIds: List<String>.from(data['memberIds'] as List),
         createdAt: dateTimeFromFirestore(data['createdAt']),
       );
 
@@ -63,6 +67,7 @@ class Group {
         'frequency': frequency.value,
         'distributionMode': distributionMode.value,
         'ownerId': ownerId,
+        'memberIds': memberIds,
         'createdAt': dateTimeToFirestore(createdAt),
       };
 }

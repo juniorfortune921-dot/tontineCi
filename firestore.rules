@@ -43,23 +43,33 @@ service cloud.firestore {
     }
 
     match /groups/{groupId} {
-      allow get, list: if isMember(groupId);
+      allow get: if isMember(groupId);
+      allow list: if isSignedIn()
+        && request.auth.uid in resource.data.memberIds;
       allow create: if isSignedIn()
         && request.resource.data.ownerId == request.auth.uid
         && request.resource.data.keys().hasAll([
-          'name', 'amount', 'currency', 'frequency', 'distributionMode', 'ownerId', 'createdAt'
+          'name', 'amount', 'currency', 'frequency', 'distributionMode', 'ownerId', 'memberIds', 'createdAt'
         ])
         && request.resource.data.keys().hasOnly([
-          'name', 'amount', 'currency', 'frequency', 'distributionMode', 'ownerId', 'createdAt'
+          'name', 'amount', 'currency', 'frequency', 'distributionMode', 'ownerId', 'memberIds', 'createdAt'
         ])
+        && request.resource.data.memberIds == [request.auth.uid]
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.amount is number
+        && request.resource.data.amount > 0
+        && request.resource.data.currency == 'XOF'
+        && request.resource.data.frequency in ['daily', 'weekly', 'monthly']
         && request.resource.data.distributionMode in ['tirage', 'ordre'];
       allow update: if isOwner(groupId)
         && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.memberIds == resource.data.memberIds
         && request.resource.data.keys().hasAll([
-          'name', 'amount', 'currency', 'frequency', 'distributionMode', 'ownerId', 'createdAt'
+          'name', 'amount', 'currency', 'frequency', 'distributionMode', 'ownerId', 'memberIds', 'createdAt'
         ])
         && request.resource.data.keys().hasOnly([
-          'name', 'amount', 'currency', 'frequency', 'distributionMode', 'ownerId', 'createdAt'
+          'name', 'amount', 'currency', 'frequency', 'distributionMode', 'ownerId', 'memberIds', 'createdAt'
         ]);
       allow delete: if isOwner(groupId);
 
