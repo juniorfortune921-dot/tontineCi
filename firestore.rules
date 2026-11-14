@@ -37,8 +37,8 @@ service cloud.firestore {
       allow list: if false;
       allow create, update: if isSignedIn()
         && request.auth.uid == userId
-        && request.resource.data.keys().hasAll(['email', 'displayName', 'createdAt'])
-        && request.resource.data.keys().hasOnly(['email', 'displayName', 'createdAt']);
+        && request.resource.data.keys().hasAll(['phoneNumber', 'displayName', 'createdAt'])
+        && request.resource.data.keys().hasOnly(['phoneNumber', 'displayName', 'createdAt']);
       allow delete: if isSignedIn() && request.auth.uid == userId;
     }
 
