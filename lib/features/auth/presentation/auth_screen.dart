@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/config/auth_config.dart';
+
 enum _AuthStage { loading, phone, code, profile, account }
 
 class AuthScreen extends StatefulWidget {
@@ -103,6 +105,9 @@ class _AuthScreenState extends State<AuthScreen> {
       _phoneNumber = phone;
     });
     try {
+      await FirebaseAuth.instance.setSettings(
+        appVerificationDisabledForTesting: kAuthTestMode,
+      );
       await FirebaseAuth.instance.verifyPhoneNumber(
         phoneNumber: phone,
         forceResendingToken: resend ? _resendingToken : null,
