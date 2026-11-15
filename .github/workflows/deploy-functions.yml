@@ -44,7 +44,7 @@ jobs:
       - name: Deploy Functions
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-service-account.json
-        run: firebase deploy --only functions --project tontine-ci-44b0f
+        run: firebase deploy --only functions --force --project tontine-ci-44b0f
 
       - name: Remove service account credentials
         if: always()
