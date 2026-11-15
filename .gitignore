@@ -12,3 +12,14 @@ linux/
 macos/
 web/
 windows/
+
+# Firebase local configuration and generated artifacts
+.firebase/
+.runtimeconfig.json
+*.local
+functions/node_modules/
+functions/lib/
+functions/.env*
+*service-account*.json
+*-firebase-adminsdk-*.json
+*service-account*.pem
