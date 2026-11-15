@@ -77,10 +77,10 @@ service cloud.firestore {
         allow get, list: if isMember(groupId);
         allow create: if isSignedIn()
           && validMember(request.resource.data, groupId, memberId)
-          && (isOwner(groupId)
-            || (memberId == request.auth.uid
-              && getAfter(/databases/$(database)/documents/groups/$(groupId)).data.ownerId
-                == request.auth.uid));
+          && memberId == request.auth.uid
+          && !exists(/databases/$(database)/documents/groups/$(groupId))
+          && getAfter(/databases/$(database)/documents/groups/$(groupId)).data.ownerId
+            == request.auth.uid;
         allow update: if false;
         allow delete: if isOwner(groupId);
       }
