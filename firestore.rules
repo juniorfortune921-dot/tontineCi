@@ -38,7 +38,16 @@ service cloud.firestore {
       allow create, update: if isSignedIn()
         && request.auth.uid == userId
         && request.resource.data.keys().hasAll(['phoneNumber', 'displayName', 'createdAt'])
-        && request.resource.data.keys().hasOnly(['phoneNumber', 'displayName', 'createdAt']);
+        && request.resource.data.keys().hasOnly([
+          'phoneNumber', 'displayName', 'createdAt', 'paymentMethod', 'paymentNumber'
+        ])
+        && (('paymentMethod' in request.resource.data.keys())
+          == ('paymentNumber' in request.resource.data.keys()))
+        && (!('paymentMethod' in request.resource.data.keys())
+          || request.resource.data.paymentMethod in ['wave', 'orange', 'mtn', 'moov'])
+        && (!('paymentNumber' in request.resource.data.keys())
+          || (request.resource.data.paymentNumber is string
+            && request.resource.data.paymentNumber.matches('^[0-9]{10}$')));
       allow delete: if isSignedIn() && request.auth.uid == userId;
     }
 

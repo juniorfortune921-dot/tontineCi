@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/config/auth_config.dart';
+import '../models/user.dart' show PaymentMethod;
 
 enum _AuthStage { loading, phone, code, profile, account }
 
@@ -21,6 +22,9 @@ class _AuthScreenState extends State<AuthScreen> {
   final _phoneController = TextEditingController();
   final _codeController = TextEditingController();
   final _nameController = TextEditingController();
+  final _paymentNumberController = TextEditingController();
+  PaymentMethod? _paymentMethod;
+  String? _paymentStatus;
   _AuthStage _stage = _AuthStage.phone;
   String? _verificationId;
   String? _errorMessage;
@@ -45,6 +49,7 @@ class _AuthScreenState extends State<AuthScreen> {
     _phoneController.dispose();
     _codeController.dispose();
     _nameController.dispose();
+    _paymentNumberController.dispose();
     super.dispose();
   }
 
@@ -63,6 +68,11 @@ class _AuthScreenState extends State<AuthScreen> {
         setState(() {
           _displayName = snapshot.data()?['displayName'] as String?;
           _phoneNumber = snapshot.data()?['phoneNumber'] as String?;
+          _paymentMethod = PaymentMethod.fromValue(
+            snapshot.data()?['paymentMethod'] as String?,
+          );
+          _paymentNumberController.text =
+              snapshot.data()?['paymentNumber'] as String? ?? '';
           _stage = _AuthStage.account;
         });
       } else {
@@ -258,6 +268,9 @@ class _AuthScreenState extends State<AuthScreen> {
       _stage = _AuthStage.phone;
       _displayName = null;
       _phoneNumber = null;
+      _paymentMethod = null;
+      _paymentNumberController.clear();
+      _paymentStatus = null;
       _verificationId = null;
       _codeController.clear();
       _errorMessage = null;
@@ -412,25 +425,143 @@ class _AuthScreenState extends State<AuthScreen> {
     ],
   );
 
-  Widget _buildAccountStep() => Column(
-    mainAxisSize: MainAxisSize.min,
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      const Text('Compte', style: TextStyle(fontSize: 24)),
-      const SizedBox(height: 24),
-      Text(_displayName ?? 'Utilisateur'),
-      if (_phoneNumber != null) ...[
+  Widget _buildAccountStep() => SingleChildScrollView(
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text('Compte', style: TextStyle(fontSize: 24)),
+        const SizedBox(height: 24),
+        Text(_displayName ?? 'Utilisateur'),
+        if (_phoneNumber != null) ...[
+          const SizedBox(height: 8),
+          Text(_phoneNumber!),
+        ],
+        const SizedBox(height: 24),
+        const Align(
+          alignment: Alignment.centerLeft,
+          child: Text('Moyen de paiement', style: TextStyle(fontSize: 18)),
+        ),
         const SizedBox(height: 8),
-        Text(_phoneNumber!),
+        if (_paymentMethod == null)
+          const Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              'Ajoutez votre moyen de paiement pour recevoir les cotisations',
+            ),
+          ),
+        const SizedBox(height: 8),
+        const Text(
+          'Ce numéro sera visible des membres qui doivent vous payer lors de votre tour.',
+          textAlign: TextAlign.left,
+        ),
+        const SizedBox(height: 16),
+        DropdownButtonFormField<PaymentMethod>(
+          value: _paymentMethod,
+          decoration: const InputDecoration(
+            labelText: 'Moyen de paiement',
+            border: OutlineInputBorder(),
+          ),
+          items: PaymentMethod.values
+              .map(
+                (method) => DropdownMenuItem(
+                  value: method,
+                  child: Text(method.label),
+                ),
+              )
+              .toList(),
+          onChanged: _isBusy
+              ? null
+              : (method) => setState(() {
+                  _paymentMethod = method;
+                  _paymentStatus = null;
+                }),
+        ),
+        const SizedBox(height: 12),
+        TextFormField(
+          controller: _paymentNumberController,
+          keyboardType: TextInputType.number,
+          inputFormatters: [
+            FilteringTextInputFormatter.digitsOnly,
+            LengthLimitingTextInputFormatter(10),
+          ],
+          onChanged: (_) => setState(() => _paymentStatus = null),
+          decoration: const InputDecoration(
+            labelText: 'Numéro de paiement',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        if (_paymentStatus != null) ...[
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              _paymentStatus!,
+              style: TextStyle(color: Colors.green.shade700),
+            ),
+          ),
+        ],
+        if (_errorMessage != null) _buildError(),
+        const SizedBox(height: 16),
+        FilledButton(
+          onPressed: _isBusy ? null : _savePaymentMethod,
+          child: _isBusy
+              ? const CircularProgressIndicator()
+              : const Text('Enregistrer'),
+        ),
+        const SizedBox(height: 24),
+        OutlinedButton.icon(
+          onPressed: _signOut,
+          icon: const Icon(Icons.logout),
+          label: const Text('Se déconnecter'),
+        ),
       ],
-      const SizedBox(height: 24),
-      OutlinedButton.icon(
-        onPressed: _signOut,
-        icon: const Icon(Icons.logout),
-        label: const Text('Se déconnecter'),
-      ),
-    ],
+    ),
   );
+
+  Future<void> _savePaymentMethod() async {
+    final paymentMethod = _paymentMethod;
+    final paymentNumber = _paymentNumberController.text;
+    if (paymentMethod == null) {
+      setState(() {
+        _errorMessage = 'Sélectionnez un moyen de paiement.';
+        _paymentStatus = null;
+      });
+      return;
+    }
+    if (!RegExp(r'^\d{10}$').hasMatch(paymentNumber)) {
+      setState(() {
+        _errorMessage = 'Le numéro de paiement doit contenir exactement 10 chiffres.';
+        _paymentStatus = null;
+      });
+      return;
+    }
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    setState(() {
+      _isBusy = true;
+      _errorMessage = null;
+      _paymentStatus = null;
+    });
+    try {
+      await FirebaseFirestore.instance.collection('users').doc(user.uid).update({
+        'paymentMethod': paymentMethod.value,
+        'paymentNumber': paymentNumber,
+      });
+      if (!mounted) return;
+      setState(() {
+        _isBusy = false;
+        _paymentStatus = 'Enregistré';
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _isBusy = false;
+        _errorMessage = 'Impossible d’enregistrer votre moyen de paiement. Réessayez.';
+      });
+    }
+  }
 
   Widget _buildError() {
     final message = _errorMessage;
