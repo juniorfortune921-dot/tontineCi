@@ -137,6 +137,7 @@ class GroupDetailsScreen extends StatefulWidget {
 class _GroupDetailsScreenState extends State<GroupDetailsScreen> {
   final _inviteService = InviteService();
   bool _isCreatingInvite = false;
+  bool _isStartingTontine = false;
 
   String get _frequencyLabel => switch (widget.group.frequency) {
         GroupFrequency.daily => 'Quotidienne',
@@ -217,6 +218,58 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen> {
     );
   }
 
+  Future<void> _confirmStartTontine() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Lancer la tontine ?'),
+        content: const Text(
+          'L’ordre des tours sera déterminé côté serveur selon le mode de '
+          'distribution de la section. Cette action est définitive.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Annuler'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Lancer'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _isStartingTontine = true);
+    try {
+      await _inviteService.startTontine(groupId: widget.group.id);
+      if (!mounted) return;
+      setState(() => _isStartingTontine = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Tontine lancée')),
+      );
+    } on FirebaseFunctionsException catch (error) {
+      _showStartTontineError(error.message);
+    } catch (_) {
+      _showStartTontineError(null);
+    }
+  }
+
+  void _showStartTontineError(String? message) {
+    if (!mounted) return;
+    setState(() => _isStartingTontine = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          message == null || message.isEmpty
+              ? 'Impossible de lancer la tontine. Réessayez.'
+              : message,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isOwner = FirebaseAuth.instance.currentUser?.uid == widget.group.ownerId;
@@ -252,6 +305,46 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen> {
               label: const Text('Inviter'),
             ),
           ],
+          if (isOwner && widget.group.memberIds.length >= 2)
+            StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: FirebaseFirestore.instance
+                  .collection('groups')
+                  .doc(widget.group.id)
+                  .collection('rounds')
+                  .limit(1)
+                  .snapshots(),
+              builder: (context, snapshot) {
+                if (snapshot.hasError) {
+                  return const Padding(
+                    padding: EdgeInsets.only(top: 8),
+                    child: Text('Impossible de vérifier l’état des tours.'),
+                  );
+                }
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Padding(
+                    padding: EdgeInsets.only(top: 16),
+                    child: Center(child: CircularProgressIndicator()),
+                  );
+                }
+                if (snapshot.data?.docs.isNotEmpty ?? false) {
+                  return const SizedBox.shrink();
+                }
+
+                return Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: FilledButton.icon(
+                    onPressed: _isStartingTontine ? null : _confirmStartTontine,
+                    icon: _isStartingTontine
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.play_arrow),
+                    label: const Text('Lancer la tontine'),
+                  ),
+                );
+              },
+            ),
         ],
       ),
     );

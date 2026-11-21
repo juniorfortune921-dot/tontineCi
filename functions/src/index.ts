@@ -17,6 +17,35 @@ function generateInviteCode(): string {
   ).join('');
 }
 
+function shuffle<T>(items: T[]): void {
+  for (let index = items.length - 1; index > 0; index -= 1) {
+    const swapIndex = randomInt(index + 1);
+    [items[index], items[swapIndex]] = [items[swapIndex], items[index]];
+  }
+}
+
+function scheduledDate(startDate: Date, frequency: string, offset: number): Date {
+  const date = new Date(startDate);
+  if (frequency === 'daily') {
+    date.setUTCDate(date.getUTCDate() + offset);
+    return date;
+  }
+  if (frequency === 'weekly') {
+    date.setUTCDate(date.getUTCDate() + offset * 7);
+    return date;
+  }
+
+  const monthIndex = startDate.getUTCMonth() + offset;
+  const year = startDate.getUTCFullYear() + Math.floor(monthIndex / 12);
+  const month = monthIndex % 12;
+  const day = Math.min(
+    startDate.getUTCDate(),
+    new Date(Date.UTC(year, month + 1, 0)).getUTCDate(),
+  );
+  date.setUTCFullYear(year, month, day);
+  return date;
+}
+
 export const ping = onCall({ region: 'europe-west1' }, (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
@@ -137,6 +166,125 @@ export const joinGroupByCode = onCall(
       });
       groupId = inviteGroupId;
     });
+
+    return { groupId };
+  },
+);
+
+export const startTontine = onCall(
+  { region: 'europe-west1' },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) {
+      throw new HttpsError('unauthenticated', 'Connexion requise.');
+    }
+
+    const groupId = request.data?.groupId;
+    if (typeof groupId !== 'string' || groupId.length === 0) {
+      throw new HttpsError('invalid-argument', 'Identifiant de section invalide.');
+    }
+
+    try {
+      await db.runTransaction(async (transaction) => {
+        const groupRef = db.collection('groups').doc(groupId);
+        const groupSnapshot = await transaction.get(groupRef);
+        if (!groupSnapshot.exists) {
+          throw new HttpsError('not-found', 'Section introuvable.');
+        }
+
+        const group = groupSnapshot.data();
+        if (group?.ownerId !== uid) {
+          throw new HttpsError(
+            'permission-denied',
+            'Seul le propriétaire peut lancer la section.',
+          );
+        }
+
+        const membersRef = groupRef.collection('members');
+        const roundsRef = groupRef.collection('rounds');
+        const [membersSnapshot, roundsSnapshot] = await Promise.all([
+          transaction.get(membersRef.orderBy('joinedAt', 'asc')),
+          transaction.get(roundsRef.limit(1)),
+        ]);
+
+        if (!roundsSnapshot.empty) {
+          throw new HttpsError(
+            'already-exists',
+            'Cette section a déjà été lancée.',
+          );
+        }
+
+        const members = membersSnapshot.docs;
+        if (members.length < 2) {
+          throw new HttpsError(
+            'failed-precondition',
+            'Il faut au moins deux membres pour lancer la section.',
+          );
+        }
+
+        const frequency = group?.frequency;
+        if (!['daily', 'weekly', 'monthly'].includes(frequency)) {
+          throw new HttpsError(
+            'failed-precondition',
+            'La fréquence de la section est invalide.',
+          );
+        }
+
+        const membersWithProfiles = await Promise.all(
+          members.map(async (member) => {
+            const recipientId = member.data().userId;
+            if (typeof recipientId !== 'string' || recipientId.length === 0) {
+              throw new HttpsError(
+                'failed-precondition',
+                'Un membre de la section est invalide.',
+              );
+            }
+            const profileSnapshot = await transaction.get(
+              db.collection('users').doc(recipientId),
+            );
+            const displayName = profileSnapshot.data()?.displayName;
+            return {
+              recipientId,
+              recipientName:
+                typeof displayName === 'string' && displayName.trim().length > 0
+                  ? displayName
+                  : 'Membre',
+            };
+          }),
+        );
+
+        const distributionMode = group?.distributionMode;
+        if (distributionMode === 'tirage') {
+          shuffle(membersWithProfiles);
+        } else if (distributionMode !== 'ordre') {
+          throw new HttpsError(
+            'failed-precondition',
+            'Le mode de distribution de la section est invalide.',
+          );
+        }
+
+        const firstScheduledDate = new Date();
+        firstScheduledDate.setUTCDate(firstScheduledDate.getUTCDate() + 1);
+
+        membersWithProfiles.forEach(({ recipientId, recipientName }, index) => {
+          const number = index + 1;
+          transaction.create(roundsRef.doc(`round-${number}`), {
+            groupId,
+            number,
+            recipientId,
+            recipientName,
+            scheduledAt: scheduledDate(firstScheduledDate, frequency, index),
+            status: 'scheduled',
+          });
+        });
+      });
+    } catch (error) {
+      if (error instanceof HttpsError) throw error;
+      throw new HttpsError(
+        'internal',
+        'Impossible de générer le calendrier des tours.',
+      );
+    }
 
     return { groupId };
   },

@@ -20,12 +20,14 @@ class Round {
     required this.recipientId,
     required this.scheduledAt,
     required this.status,
+    this.recipientName,
   });
 
   final String id;
   final String groupId;
   final int number;
   final String recipientId;
+  final String? recipientName;
   final DateTime scheduledAt;
   final RoundStatus status;
 
@@ -34,6 +36,7 @@ class Round {
         groupId: data['groupId'] as String,
         number: data['number'] as int,
         recipientId: data['recipientId'] as String,
+        recipientName: data['recipientName'] as String? ?? 'Membre',
         scheduledAt: dateTimeFromFirestore(data['scheduledAt']),
         status: RoundStatus.fromValue(data['status'] as String),
       );
@@ -42,6 +45,7 @@ class Round {
         'groupId': groupId,
         'number': number,
         'recipientId': recipientId,
+        if (recipientName != null) 'recipientName': recipientName,
         'scheduledAt': dateTimeToFirestore(scheduledAt),
         'status': status.value,
       };

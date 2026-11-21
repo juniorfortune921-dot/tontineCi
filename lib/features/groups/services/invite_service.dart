@@ -25,4 +25,10 @@ class InviteService {
     }
     return groupId;
   }
+
+  Future<void> startTontine({required String groupId}) async {
+    await _functions
+        .httpsCallable('startTontine')
+        .call<Map<String, dynamic>>({'groupId': groupId});
+  }
 }
