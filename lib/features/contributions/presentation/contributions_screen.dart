@@ -151,14 +151,11 @@ class _GroupContributionsState extends State<_GroupContributions> {
               }
 
               final contributions = (snapshot.data?.docs ?? [])
-                  .map(
-                    (document) => Contribution.fromMap(
-                      document.id,
-                      document.data(
-                        serverTimestampBehavior: ServerTimestampBehavior.estimate,
-                      ),
-                    ),
-                  )
+                  .map((document) {
+                    final data = document.data();
+                    data['createdAt'] ??= DateTime.now();
+                    return Contribution.fromMap(document.id, data);
+                  })
                   .toList()
                 ..sort((first, second) =>
                     first.createdAt.compareTo(second.createdAt));
