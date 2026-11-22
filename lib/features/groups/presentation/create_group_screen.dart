@@ -55,14 +55,25 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
       memberIds: [user.uid],
       createdAt: now,
     );
-    final member = Member(
-      id: user.uid,
-      userId: user.uid,
-      groupId: groupReference.id,
-      joinedAt: now,
-    );
-
     try {
+      final userProfile = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
+      final profileName = userProfile.data()?['displayName'];
+      final normalizedName = profileName is String ? profileName.trim() : '';
+      final displayName = normalizedName.isEmpty
+          ? 'Membre'
+          : normalizedName.length > 40
+              ? normalizedName.substring(0, 40)
+              : normalizedName;
+      final member = Member(
+        id: user.uid,
+        userId: user.uid,
+        groupId: groupReference.id,
+        joinedAt: now,
+        displayName: displayName,
+      );
       final batch = FirebaseFirestore.instance.batch();
       batch.set(groupReference, group.toMap());
       batch.set(

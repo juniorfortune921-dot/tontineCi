@@ -327,6 +327,14 @@ export const joinGroupByCode = onCall(
       throw new HttpsError('invalid-argument', 'Code invalide.');
     }
 
+    const userSnapshot = await db.collection('users').doc(uid).get();
+    const profileName = userSnapshot.data()?.displayName;
+    const normalizedName =
+      typeof profileName === 'string' ? profileName.trim() : '';
+    const displayName = normalizedName
+      ? normalizedName.slice(0, 40)
+      : 'Membre';
+
     let groupId = '';
     await db.runTransaction(async (transaction) => {
       const inviteRef = db.collection('invites').doc(code);
@@ -368,6 +376,7 @@ export const joinGroupByCode = onCall(
         userId: uid,
         groupId: inviteGroupId,
         joinedAt: FieldValue.serverTimestamp(),
+        displayName,
       });
       groupId = inviteGroupId;
     });

@@ -42,7 +42,7 @@ class ContributionsScreen extends StatelessWidget {
 
         final groups = snapshot.data?.docs ?? [];
         if (groups.isEmpty) {
-          return const Center(child: Text('Aucun tour en cours'));
+          return const Center(child: Text('Aucune section'));
         }
 
         return ListView.separated(
@@ -129,7 +129,7 @@ class _GroupContributionsState extends State<_GroupContributions> {
               if (rounds.isEmpty) {
                 return const Padding(
                   padding: EdgeInsets.symmetric(vertical: 12),
-                  child: Text('Aucun tour en cours'),
+                  child: Text("La tontine n'est pas encore lancée"),
                 );
               }
               if (currentRounds.isEmpty) {
@@ -536,27 +536,33 @@ class _ContributionRow extends StatelessWidget {
             .snapshots(),
         builder: (context, snapshot) {
           final memberData = snapshot.data?.data();
-          final name = memberData?['displayName'] as String? ??
-              memberData?['name'] as String? ??
-              'Membre';
+          final memberName = memberData?['displayName'];
+          final name = memberName is String && memberName.trim().isNotEmpty
+              ? memberName
+              : 'Membre';
 
           return ListTile(
             contentPadding: EdgeInsets.zero,
-            title: Text(name),
+            title: Row(
+              children: [
+                Expanded(child: Text(name)),
+                if (contribution.status == ContributionStatus.confirme)
+                  const Text('Confirmée')
+                else if (canConfirm)
+                  TextButton(
+                    onPressed: isWriting ? null : onConfirm,
+                    child: isWriting
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Text('Confirmer la réception'),
+                  )
+                else
+                  Text(_statusLabel(contribution.status)),
+              ],
+            ),
             subtitle: Text('${contribution.amount} FCFA'),
-            trailing: contribution.status == ContributionStatus.confirme
-                ? const Text('Confirmée')
-                : canConfirm
-                    ? TextButton(
-                        onPressed: isWriting ? null : onConfirm,
-                        child: isWriting
-                            ? const SizedBox.square(
-                                dimension: 18,
-                                child: CircularProgressIndicator(strokeWidth: 2),
-                              )
-                            : const Text('Confirmer la réception'),
-                      )
-                    : Text(_statusLabel(contribution.status)),
           );
         },
       );

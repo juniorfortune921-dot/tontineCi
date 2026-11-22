@@ -27,7 +27,12 @@ service cloud.firestore {
 
     function validMember(data, groupId, memberId) {
       return data.keys().hasAll(['userId', 'groupId', 'joinedAt'])
-        && data.keys().hasOnly(['userId', 'groupId', 'joinedAt'])
+        && data.keys().hasOnly([
+          'userId', 'groupId', 'joinedAt', 'displayName'
+        ])
+          || (data.displayName is string
+            && data.displayName.size() > 0
+            && data.displayName.size() <= 40))
         && data.userId == memberId
         && data.groupId == groupId;
     }
