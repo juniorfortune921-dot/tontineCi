@@ -55,6 +55,104 @@ export const ping = onCall({ region: 'europe-west1' }, (request) => {
   return { ok: true, uid };
 });
 
+export const getPayeeInfo = onCall(
+  { region: 'europe-west1' },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) {
+      throw new HttpsError('unauthenticated', 'Connexion requise.');
+    }
+
+    const groupId = request.data?.groupId;
+    const roundId = request.data?.roundId;
+    if (
+      typeof groupId !== 'string' ||
+      groupId.length === 0 ||
+      typeof roundId !== 'string' ||
+      roundId.length === 0
+    ) {
+      throw new HttpsError('invalid-argument', 'Identifiant de tour invalide.');
+    }
+
+    const groupRef = db.collection('groups').doc(groupId);
+    const [groupSnapshot, memberSnapshot] = await Promise.all([
+      groupRef.get(),
+      groupRef.collection('members').doc(uid).get(),
+    ]);
+    if (!groupSnapshot.exists) {
+      throw new HttpsError('not-found', 'Section introuvable.');
+    }
+    if (!memberSnapshot.exists) {
+      throw new HttpsError(
+        'permission-denied',
+        'Vous devez être membre de cette section.',
+      );
+    }
+
+    const roundsRef = groupRef.collection('rounds');
+    const [roundSnapshot, roundsSnapshot] = await Promise.all([
+      roundsRef.doc(roundId).get(),
+      roundsRef.get(),
+    ]);
+    const round = roundSnapshot.data();
+    const currentRound = roundsSnapshot.docs
+      .filter((document) => document.data().status !== 'completed')
+      .sort((first, second) => first.data().number - second.data().number)[0];
+
+    if (
+      !roundSnapshot.exists ||
+      round?.groupId !== groupId ||
+      currentRound?.id !== roundId
+    ) {
+      throw new HttpsError(
+        'failed-precondition',
+        "Ce tour n'est pas en cours",
+      );
+    }
+
+    const recipientId = round.recipientId;
+    if (typeof recipientId !== 'string' || recipientId.length === 0) {
+      throw new HttpsError('failed-precondition', "Ce tour n'est pas en cours");
+    }
+    if (recipientId === uid) {
+      throw new HttpsError(
+        'permission-denied',
+        'Le bénéficiaire ne peut pas consulter ses propres informations de paiement.',
+      );
+    }
+
+    const recipientSnapshot = await db.collection('users').doc(recipientId).get();
+    const recipient = recipientSnapshot.data();
+    const paymentMethod = recipient?.paymentMethod;
+    const paymentNumber = recipient?.paymentNumber;
+    if (
+      typeof paymentMethod !== 'string' ||
+      !['wave', 'orange', 'mtn', 'moov'].includes(paymentMethod) ||
+      typeof paymentNumber !== 'string' ||
+      paymentNumber.length === 0
+    ) {
+      throw new HttpsError(
+        'failed-precondition',
+        "Le bénéficiaire n'a pas encore enregistré son moyen de paiement",
+      );
+    }
+
+    const displayName = recipient?.displayName;
+    const roundRecipientName = round.recipientName;
+    return {
+      recipientName:
+        typeof displayName === 'string' && displayName.trim().length > 0
+          ? displayName
+          : typeof roundRecipientName === 'string' &&
+              roundRecipientName.trim().length > 0
+            ? roundRecipientName
+            : 'Membre',
+      paymentMethod,
+      paymentNumber,
+    };
+  },
+);
+
 export const createInviteCode = onCall(
   { region: 'europe-west1' },
   async (request) => {
@@ -242,16 +340,36 @@ export const startTontine = onCall(
             const profileSnapshot = await transaction.get(
               db.collection('users').doc(recipientId),
             );
-            const displayName = profileSnapshot.data()?.displayName;
+            const profile = profileSnapshot.data();
+            const displayName = profile?.displayName;
             return {
               recipientId,
               recipientName:
                 typeof displayName === 'string' && displayName.trim().length > 0
                   ? displayName
                   : 'Membre',
+              hasPaymentMethod:
+                typeof profile?.paymentMethod === 'string' &&
+                profile.paymentMethod.length > 0 &&
+                typeof profile.paymentNumber === 'string' &&
+                profile.paymentNumber.length > 0,
             };
           }),
         );
+
+        const membersMissingPayment = membersWithProfiles.filter(
+          (member) => !member.hasPaymentMethod,
+        );
+        if (membersMissingPayment.length > 0) {
+          const names = membersMissingPayment
+            .slice(0, 10)
+            .map((member) => member.recipientName)
+            .join(', ');
+          throw new HttpsError(
+            'failed-precondition',
+            `${membersMissingPayment.length} membre(s) n'ont pas enregistré leur moyen de paiement : ${names}`,
+          );
+        }
 
         const distributionMode = group?.distributionMode;
         if (distributionMode === 'tirage') {

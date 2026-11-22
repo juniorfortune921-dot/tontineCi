@@ -31,4 +31,30 @@ class InviteService {
         .httpsCallable('startTontine')
         .call<Map<String, dynamic>>({'groupId': groupId});
   }
+
+  Future<Map<String, String>> getPayeeInfo({
+    required String groupId,
+    required String roundId,
+  }) async {
+    final response = await _functions
+        .httpsCallable('getPayeeInfo')
+        .call<Map<String, dynamic>>({
+          'groupId': groupId,
+          'roundId': roundId,
+        });
+    final data = response.data;
+    final recipientName = data['recipientName'];
+    final paymentMethod = data['paymentMethod'];
+    final paymentNumber = data['paymentNumber'];
+    if (recipientName is! String ||
+        paymentMethod is! String ||
+        paymentNumber is! String) {
+      throw StateError('Réponse invalide lors du chargement du paiement.');
+    }
+    return {
+      'recipientName': recipientName,
+      'paymentMethod': paymentMethod,
+      'paymentNumber': paymentNumber,
+    };
+  }
 }

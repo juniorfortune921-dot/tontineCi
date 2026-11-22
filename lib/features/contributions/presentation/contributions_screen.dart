@@ -1,8 +1,11 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../rounds/models/round.dart';
+import '../../groups/services/invite_service.dart';
 import '../models/contribution.dart';
 
 class ContributionsScreen extends StatelessWidget {
@@ -74,10 +77,13 @@ class _GroupContributions extends StatefulWidget {
 }
 
 class _GroupContributionsState extends State<_GroupContributions> {
+  final _inviteService = InviteService();
   final Set<String> _writingContributionIds = {};
   bool _isDeclaring = false;
+  bool _isLoadingPayeeInfo = false;
   String? _submittedRoundId;
   String? _writeError;
+  String? _payeeError;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -201,8 +207,111 @@ class _GroupContributionsState extends State<_GroupContributions> {
               );
             },
           ),
+          if (round.recipientId != widget.uid) ...[
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: _isLoadingPayeeInfo ? null : () => _showPayeeInfo(round),
+              icon: _isLoadingPayeeInfo
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.account_balance_wallet_outlined),
+              label: const Text('Voir où payer'),
+            ),
+            if (_payeeError != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  _payeeError!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ),
+          ],
         ],
       );
+
+  Future<void> _showPayeeInfo(Round round) async {
+    setState(() {
+      _isLoadingPayeeInfo = true;
+      _payeeError = null;
+    });
+    try {
+      final payeeInfo = await _inviteService.getPayeeInfo(
+        groupId: widget.groupId,
+        roundId: round.id,
+      );
+      if (!mounted) return;
+      setState(() => _isLoadingPayeeInfo = false);
+
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Où payer ?'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                payeeInfo['recipientName']!,
+                style: Theme.of(dialogContext).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 8),
+              Text(_paymentMethodLabel(payeeInfo['paymentMethod']!)),
+              const SizedBox(height: 12),
+              SelectableText(
+                payeeInfo['paymentNumber']!,
+                style: Theme.of(dialogContext).textTheme.headlineSmall,
+              ),
+              const SizedBox(height: 12),
+              Text('Montant : ${widget.amount} FCFA'),
+            ],
+          ),
+          actions: [
+            TextButton.icon(
+              onPressed: () async {
+                await Clipboard.setData(
+                  ClipboardData(text: payeeInfo['paymentNumber']!),
+                );
+                if (!dialogContext.mounted) return;
+                ScaffoldMessenger.of(dialogContext).showSnackBar(
+                  const SnackBar(content: Text('Numéro copié')),
+                );
+              },
+              icon: const Icon(Icons.copy),
+              label: const Text('Copier le numéro'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Fermer'),
+            ),
+          ],
+        ),
+      );
+    } on FirebaseFunctionsException catch (error) {
+      _setPayeeError(error.message);
+    } catch (_) {
+      _setPayeeError(null);
+    }
+  }
+
+  void _setPayeeError(String? message) {
+    if (!mounted) return;
+    setState(() {
+      _isLoadingPayeeInfo = false;
+      _payeeError = message == null || message.isEmpty
+          ? 'Impossible de charger les informations de paiement. Réessayez.'
+          : message;
+    });
+  }
+
+  String _paymentMethodLabel(String method) => switch (method) {
+        'wave' => 'Wave',
+        'orange' => 'Orange Money',
+        'mtn' => 'MTN MoMo',
+        'moov' => 'Moov Money',
+        _ => 'Moyen de paiement inconnu',
+      };
 
   Widget _buildReceivedContributions(List<Contribution> contributions) {
     if (contributions.isEmpty) {
