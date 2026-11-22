@@ -57,4 +57,17 @@ class InviteService {
       'paymentNumber': paymentNumber,
     };
   }
+
+  Future<Map<String, dynamic>> closeRoundIfComplete({
+    required String groupId,
+    required String roundId,
+  }) async {
+    final response = await _functions
+        .httpsCallable('closeRoundIfComplete')
+        .call<Map<String, dynamic>>({
+          'groupId': groupId,
+          'roundId': roundId,
+        });
+    return response.data;
+  }
 }

@@ -153,6 +153,113 @@ export const getPayeeInfo = onCall(
   },
 );
 
+export const closeRoundIfComplete = onCall(
+  { region: 'europe-west1' },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) {
+      throw new HttpsError('unauthenticated', 'Connexion requise.');
+    }
+
+    const groupId = request.data?.groupId;
+    const roundId = request.data?.roundId;
+    if (
+      typeof groupId !== 'string' ||
+      groupId.length === 0 ||
+      typeof roundId !== 'string' ||
+      roundId.length === 0
+    ) {
+      throw new HttpsError('invalid-argument', 'Identifiant de tour invalide.');
+    }
+
+    try {
+      return await db.runTransaction(async (transaction) => {
+        const groupRef = db.collection('groups').doc(groupId);
+        const roundRef = groupRef.collection('rounds').doc(roundId);
+        const memberRef = groupRef.collection('members').doc(uid);
+        const [roundSnapshot, memberSnapshot] = await Promise.all([
+          transaction.get(roundRef),
+          transaction.get(memberRef),
+        ]);
+
+        if (!memberSnapshot.exists) {
+          throw new HttpsError(
+            'permission-denied',
+            'Vous devez être membre de cette section.',
+          );
+        }
+        if (!roundSnapshot.exists || roundSnapshot.data()?.groupId !== groupId) {
+          throw new HttpsError('not-found', 'Tour introuvable dans cette section.');
+        }
+
+        const round = roundSnapshot.data();
+        if (round?.status === 'completed') {
+          return { completed: true, alreadyClosed: true };
+        }
+
+        const recipientId = round?.recipientId;
+        const roundNumber = round?.number;
+        if (
+          typeof recipientId !== 'string' ||
+          typeof roundNumber !== 'number' ||
+          !Number.isInteger(roundNumber)
+        ) {
+          throw new HttpsError('failed-precondition', 'Les données du tour sont invalides.');
+        }
+
+        const membersRef = groupRef.collection('members');
+        const contributionsRef = groupRef.collection('contributions');
+        const [membersSnapshot, contributionsSnapshot] = await Promise.all([
+          transaction.get(membersRef),
+          transaction.get(contributionsRef.where('roundId', '==', roundId)),
+        ]);
+        const expectedMemberIds = new Set(
+          membersSnapshot.docs
+            .map((member) => member.id)
+            .filter((memberId) => memberId !== recipientId),
+        );
+        const confirmedMemberIds = new Set(
+          contributionsSnapshot.docs
+            .filter((contribution) => contribution.data().status === 'confirme')
+            .map((contribution) => contribution.data().memberId)
+            .filter(
+              (memberId): memberId is string =>
+                typeof memberId === 'string' && expectedMemberIds.has(memberId),
+            ),
+        );
+
+        if (confirmedMemberIds.size < expectedMemberIds.size) {
+          return {
+            completed: false,
+            confirmed: confirmedMemberIds.size,
+            expected: expectedMemberIds.size,
+          };
+        }
+
+        const nextRoundSnapshot = await transaction.get(
+          groupRef
+            .collection('rounds')
+            .where('number', '==', roundNumber + 1)
+            .limit(1),
+        );
+        const nextRound = nextRoundSnapshot.docs[0];
+        transaction.update(roundRef, { status: 'completed' });
+
+        return {
+          completed: true,
+          nextRound: nextRound ? roundNumber + 1 : null,
+        };
+      });
+    } catch (error) {
+      if (error instanceof HttpsError) throw error;
+      throw new HttpsError(
+        'internal',
+        'Impossible de vérifier la clôture de ce tour.',
+      );
+    }
+  },
+);
+
 export const createInviteCode = onCall(
   { region: 'europe-west1' },
   async (request) => {

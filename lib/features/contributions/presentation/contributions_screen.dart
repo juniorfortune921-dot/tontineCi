@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_functions/cloud_functions.dart';
@@ -7,6 +9,9 @@ import 'package:flutter/services.dart';
 import '../../rounds/models/round.dart';
 import '../../groups/services/invite_service.dart';
 import '../models/contribution.dart';
+
+final _autoCloseAttemptsThisSession = <String>{};
+final _roundsClosedThisSession = <String>{};
 
 class ContributionsScreen extends StatelessWidget {
   const ContributionsScreen({super.key});
@@ -46,10 +51,14 @@ class ContributionsScreen extends StatelessWidget {
           separatorBuilder: (context, index) => const Divider(height: 32),
           itemBuilder: (context, index) {
             final group = groups[index];
+            final memberIds = (group.data()['memberIds'] as List<dynamic>? ?? [])
+                .whereType<String>()
+                .toList();
             return _GroupContributions(
               groupId: group.id,
               groupName: group.data()['name'] as String? ?? 'Section',
               amount: (group.data()['amount'] as num).toInt(),
+              memberIds: memberIds,
               uid: uid,
             );
           },
@@ -64,12 +73,14 @@ class _GroupContributions extends StatefulWidget {
     required this.groupId,
     required this.groupName,
     required this.amount,
+    required this.memberIds,
     required this.uid,
   });
 
   final String groupId;
   final String groupName;
   final int amount;
+  final List<String> memberIds;
   final String uid;
 
   @override
@@ -109,9 +120,11 @@ class _GroupContributionsState extends State<_GroupContributions> {
 
               final rounds = (snapshot.data?.docs ?? [])
                   .map((document) => Round.fromMap(document.id, document.data()))
-                  .where((round) => round.status != RoundStatus.completed)
                   .toList()
                 ..sort((first, second) => first.number.compareTo(second.number));
+              final currentRounds = rounds
+                  .where((round) => round.status != RoundStatus.completed)
+                  .toList();
 
               if (rounds.isEmpty) {
                 return const Padding(
@@ -119,8 +132,14 @@ class _GroupContributionsState extends State<_GroupContributions> {
                   child: Text('Aucun tour en cours'),
                 );
               }
+              if (currentRounds.isEmpty) {
+                return const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child: Text('Tontine terminée'),
+                );
+              }
 
-              return _buildCurrentRound(rounds.first);
+              return _buildCurrentRound(currentRounds.first);
             },
           ),
         ],
@@ -165,6 +184,8 @@ class _GroupContributionsState extends State<_GroupContributions> {
                   .toList()
                 ..sort((first, second) =>
                     first.createdAt.compareTo(second.createdAt));
+
+              _maybeScheduleAutoClose(round, contributions);
 
               if (round.recipientId == widget.uid) {
                 return _buildReceivedContributions(contributions);
@@ -389,12 +410,99 @@ class _GroupContributionsState extends State<_GroupContributions> {
           .update({'status': ContributionStatus.confirme.value});
     } on FirebaseException {
       if (!mounted) return;
-      setState(() => _writeError = 'Impossible de confirmer la réception. Réessayez.');
+      setState(() {
+        _writeError = 'Impossible de confirmer la réception. Réessayez.';
+        _writingContributionIds.remove(contribution.id);
+      });
+      return;
+    }
+
+    try {
+      final result = await _requestRoundClosure(contribution.roundId);
+      if (result['completed'] == true) {
+        _showRoundClosedMessage(contribution.roundId);
+      }
+    } on FirebaseFunctionsException catch (error) {
+      _showRoundCloseError(error.message);
+    } catch (_) {
+      _showRoundCloseError(null);
     } finally {
       if (mounted) {
         setState(() => _writingContributionIds.remove(contribution.id));
       }
     }
+  }
+
+  void _maybeScheduleAutoClose(
+    Round round,
+    List<Contribution> contributions,
+  ) {
+    final expectedMemberIds = widget.memberIds
+        .where((memberId) => memberId != round.recipientId)
+        .toSet();
+    if (expectedMemberIds.isEmpty) return;
+
+    final confirmedMemberIds = contributions
+        .where((contribution) =>
+            contribution.status == ContributionStatus.confirme &&
+            expectedMemberIds.contains(contribution.memberId))
+        .map((contribution) => contribution.memberId)
+        .toSet();
+    if (!expectedMemberIds.every(confirmedMemberIds.contains)) return;
+
+    final attemptKey = '${widget.uid}:${widget.groupId}:${round.id}';
+    if (_roundsClosedThisSession.contains('${widget.groupId}:${round.id}')) {
+      return;
+    }
+    if (!_autoCloseAttemptsThisSession.add(attemptKey)) return;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        _autoCloseAttemptsThisSession.remove(attemptKey);
+        return;
+      }
+      unawaited(_closeRoundIfComplete(round));
+    });
+  }
+
+  Future<void> _closeRoundIfComplete(Round round) async {
+    try {
+      final result = await _requestRoundClosure(round.id);
+      if (result['completed'] == true) {
+        _showRoundClosedMessage(round.id);
+      }
+    } on FirebaseFunctionsException catch (error) {
+      _showRoundCloseError(error.message);
+    } catch (_) {
+      _showRoundCloseError(null);
+    }
+  }
+
+  Future<Map<String, dynamic>> _requestRoundClosure(String roundId) =>
+      _inviteService.closeRoundIfComplete(
+        groupId: widget.groupId,
+        roundId: roundId,
+      );
+
+  void _showRoundClosedMessage(String roundId) {
+    if (!_roundsClosedThisSession.add('${widget.groupId}:$roundId')) return;
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Tour terminé, passage au tour suivant')),
+    );
+  }
+
+  void _showRoundCloseError(String? message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          message == null || message.isEmpty
+              ? 'Réception confirmée, mais le statut du tour n’a pas pu être actualisé.'
+              : 'Réception confirmée. $message',
+        ),
+      ),
+    );
   }
 
   String _formatDate(DateTime date) =>
