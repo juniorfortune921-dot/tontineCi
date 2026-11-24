@@ -90,11 +90,19 @@ class _GroupContributions extends StatefulWidget {
 class _GroupContributionsState extends State<_GroupContributions> {
   final _inviteService = InviteService();
   final Set<String> _writingContributionIds = {};
+  Timer? _paymentWindowTimer;
+  String? _scheduledPaymentWindowRefresh;
   bool _isDeclaring = false;
   bool _isLoadingPayeeInfo = false;
   String? _submittedRoundId;
   String? _writeError;
   String? _payeeError;
+
+  @override
+  void dispose() {
+    _paymentWindowTimer?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) => Column(
@@ -145,18 +153,30 @@ class _GroupContributionsState extends State<_GroupContributions> {
         ],
       );
 
-  Widget _buildCurrentRound(Round round) => Column(
+  Widget _buildCurrentRound(Round round) {
+    _schedulePaymentWindowRefresh(round);
+    final now = DateTime.now();
+    final isBeforeOpening = round.opensAt != null && now.isBefore(round.opensAt!);
+    final isAfterClosing = round.closesAt != null && !now.isBefore(round.closesAt!);
+
+    return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           ListTile(
             contentPadding: EdgeInsets.zero,
             title: Text('Tour ${round.number}'),
-            subtitle: Text(
-              '${round.recipientId == widget.uid ? 'Vous' : round.recipientName ?? 'Membre'}\n'
-              'Prévu le ${_formatDate(round.scheduledAt)}\n'
+            subtitle: Text([
+              round.recipientId == widget.uid
+                  ? 'Vous'
+                  : round.recipientName ?? 'Membre',
+              'Prévu le ${_formatDate(round.scheduledAt)}',
+              if (round.opensAt != null)
+                'Ouverture : ${_formatDate(round.opensAt!)}',
+              if (round.closesAt != null)
+                'Clôture : ${_formatDate(round.closesAt!)}',
               'À verser : ${widget.amount} FCFA',
-            ),
-            isThreeLine: true,
+            ].join('\n')),
+            isThreeLine: round.opensAt != null || round.closesAt != null,
           ),
           StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
             stream: FirebaseFirestore.instance
@@ -188,7 +208,20 @@ class _GroupContributionsState extends State<_GroupContributions> {
               _maybeScheduleAutoClose(round, contributions);
 
               if (round.recipientId == widget.uid) {
-                return _buildReceivedContributions(contributions);
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (isBeforeOpening)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Text(
+                          'Ouverture des paiements le '
+                          '${_formatDate(round.opensAt!)}',
+                        ),
+                      ),
+                    _buildReceivedContributions(contributions),
+                  ],
+                );
               }
 
               final ownContribution = contributions
@@ -205,6 +238,14 @@ class _GroupContributionsState extends State<_GroupContributions> {
               }
               if (_submittedRoundId == round.id) {
                 return const Text('Déclaration envoyée');
+              }
+              if (isBeforeOpening) {
+                return Text(
+                  'Ouverture des paiements le ${_formatDate(round.opensAt!)}',
+                );
+              }
+              if (isAfterClosing) {
+                return const Text('Délai de paiement dépassé');
               }
 
               return Column(
@@ -228,7 +269,9 @@ class _GroupContributionsState extends State<_GroupContributions> {
               );
             },
           ),
-          if (round.recipientId != widget.uid) ...[
+          if (round.recipientId != widget.uid &&
+              !isBeforeOpening &&
+              !isAfterClosing) ...[
             const SizedBox(height: 8),
             OutlinedButton.icon(
               onPressed: _isLoadingPayeeInfo ? null : () => _showPayeeInfo(round),
@@ -251,6 +294,33 @@ class _GroupContributionsState extends State<_GroupContributions> {
           ],
         ],
       );
+  }
+
+  void _schedulePaymentWindowRefresh(Round round) {
+    final now = DateTime.now();
+    final futureBoundaries = [round.opensAt, round.closesAt]
+        .whereType<DateTime>()
+        .where((boundary) => boundary.isAfter(now))
+        .toList()
+      ..sort();
+    if (futureBoundaries.isEmpty) {
+      _paymentWindowTimer?.cancel();
+      _scheduledPaymentWindowRefresh = null;
+      return;
+    }
+
+    final nextBoundary = futureBoundaries.first;
+    final refreshKey = '${round.id}:${nextBoundary.microsecondsSinceEpoch}';
+    if (_scheduledPaymentWindowRefresh == refreshKey) return;
+
+    _paymentWindowTimer?.cancel();
+    _scheduledPaymentWindowRefresh = refreshKey;
+    _paymentWindowTimer = Timer(nextBoundary.difference(now), () {
+      if (!mounted) return;
+      _scheduledPaymentWindowRefresh = null;
+      setState(() {});
+    });
+  }
 
   Future<void> _showPayeeInfo(Round round) async {
     setState(() {

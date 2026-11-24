@@ -10,6 +10,10 @@ const MAX_MEMBERS = 50;
 const INVITE_CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 const INVITE_CODE_LENGTH = 8;
 const INVITE_CODE_PATTERN = /^[A-HJ-KMNP-Z2-9]{8}$/;
+// Calendrier : les paiements mensuels ouvrent deux jours avant la date prévue.
+const MONTHLY_OPENING_MARGIN_DAYS = 2;
+// Les fenêtres quotidiennes et hebdomadaires durent un jour après la date prévue.
+const DAILY_WEEKLY_PAYMENT_WINDOW_DAYS = 1;
 
 function generateInviteCode(): string {
   return Array.from({ length: INVITE_CODE_LENGTH }, () =>
@@ -44,6 +48,12 @@ function scheduledDate(startDate: Date, frequency: string, offset: number): Date
   );
   date.setUTCFullYear(year, month, day);
   return date;
+}
+
+function formatFrenchDate(date: Date): string {
+  return `${String(date.getUTCDate()).padStart(2, '0')}/` +
+    `${String(date.getUTCMonth() + 1).padStart(2, '0')}/` +
+    `${String(date.getUTCFullYear()).padStart(4, '0')}`;
 }
 
 export const ping = onCall({ region: 'europe-west1' }, (request) => {
@@ -108,6 +118,24 @@ export const getPayeeInfo = onCall(
         'failed-precondition',
         "Ce tour n'est pas en cours",
       );
+    }
+
+    const opensAt = round.opensAt?.toDate?.();
+    const closesAt = round.closesAt?.toDate?.();
+    if (opensAt instanceof Date && closesAt instanceof Date) {
+      const now = new Date();
+      if (now < opensAt) {
+        throw new HttpsError(
+          'failed-precondition',
+          `Les paiements ouvrent le ${formatFrenchDate(opensAt)}`,
+        );
+      }
+      if (now >= closesAt) {
+        throw new HttpsError(
+          'failed-precondition',
+          'Le délai de paiement est dépassé',
+        );
+      }
     }
 
     const recipientId = round.recipientId;
@@ -287,6 +315,13 @@ export const createInviteCode = onCall(
         );
       }
 
+      const roundsSnapshot = await transaction.get(
+        groupRef.collection('rounds').limit(1),
+      );
+      if (!roundsSnapshot.empty) {
+        throw new HttpsError('failed-precondition', 'La tontine est déjà lancée');
+      }
+
       const activeInvites = await transaction.get(
         db.collection('invites')
           .where('groupId', '==', groupId)
@@ -356,6 +391,13 @@ export const joinGroupByCode = onCall(
       ]);
       if (!groupSnapshot.exists) {
         throw new HttpsError('not-found', 'Section introuvable.');
+      }
+
+      const roundsSnapshot = await transaction.get(
+        groupRef.collection('rounds').limit(1),
+      );
+      if (!roundsSnapshot.empty) {
+        throw new HttpsError('failed-precondition', 'La tontine est déjà lancée');
       }
 
       const memberIds = groupSnapshot.data()?.memberIds;
@@ -499,15 +541,51 @@ export const startTontine = onCall(
 
         const firstScheduledDate = new Date();
         firstScheduledDate.setUTCDate(firstScheduledDate.getUTCDate() + 1);
+        firstScheduledDate.setUTCHours(0, 0, 0, 0);
+
+        const scheduledDates = membersWithProfiles.map((_, index) => {
+          const date = scheduledDate(firstScheduledDate, frequency, index);
+          date.setUTCHours(0, 0, 0, 0);
+          return date;
+        });
 
         membersWithProfiles.forEach(({ recipientId, recipientName }, index) => {
           const number = index + 1;
+          const scheduledAt = scheduledDates[index];
+          const opensAt = new Date(scheduledAt);
+          if (frequency === 'monthly') {
+            opensAt.setUTCDate(
+              opensAt.getUTCDate() - MONTHLY_OPENING_MARGIN_DAYS,
+            );
+          }
+
+          let closesAt: Date;
+          if (frequency === 'daily' || frequency === 'weekly') {
+            closesAt = new Date(scheduledAt);
+            closesAt.setUTCDate(
+              closesAt.getUTCDate() + DAILY_WEEKLY_PAYMENT_WINDOW_DAYS,
+            );
+          } else if (index + 1 < scheduledDates.length) {
+            closesAt = new Date(scheduledDates[index + 1]);
+            closesAt.setUTCDate(
+              closesAt.getUTCDate() - MONTHLY_OPENING_MARGIN_DAYS,
+            );
+          } else {
+            closesAt = scheduledDate(scheduledAt, 'monthly', 1);
+            closesAt.setUTCHours(0, 0, 0, 0);
+            closesAt.setUTCDate(
+              closesAt.getUTCDate() - MONTHLY_OPENING_MARGIN_DAYS,
+            );
+          }
+
           transaction.create(roundsRef.doc(`round-${number}`), {
             groupId,
             number,
             recipientId,
             recipientName,
-            scheduledAt: scheduledDate(firstScheduledDate, frequency, index),
+            scheduledAt,
+            opensAt,
+            closesAt,
             status: 'scheduled',
           });
         });

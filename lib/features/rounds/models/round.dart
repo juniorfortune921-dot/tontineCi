@@ -21,6 +21,8 @@ class Round {
     required this.scheduledAt,
     required this.status,
     this.recipientName,
+    this.opensAt,
+    this.closesAt,
   });
 
   final String id;
@@ -30,6 +32,8 @@ class Round {
   final String? recipientName;
   final DateTime scheduledAt;
   final RoundStatus status;
+  final DateTime? opensAt;
+  final DateTime? closesAt;
 
   factory Round.fromMap(String id, Map<String, dynamic> data) => Round(
         id: id,
@@ -39,6 +43,12 @@ class Round {
         recipientName: data['recipientName'] as String? ?? 'Membre',
         scheduledAt: dateTimeFromFirestore(data['scheduledAt']),
         status: RoundStatus.fromValue(data['status'] as String),
+        opensAt: data['opensAt'] == null
+          ? null
+          : dateTimeFromFirestore(data['opensAt']),
+        closesAt: data['closesAt'] == null
+          ? null
+          : dateTimeFromFirestore(data['closesAt']),
       );
 
   Map<String, dynamic> toMap() => {
@@ -48,5 +58,7 @@ class Round {
         if (recipientName != null) 'recipientName': recipientName,
         'scheduledAt': dateTimeToFirestore(scheduledAt),
         'status': status.value,
+        if (opensAt != null) 'opensAt': dateTimeToFirestore(opensAt!),
+        if (closesAt != null) 'closesAt': dateTimeToFirestore(closesAt!),
       };
 }

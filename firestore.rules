@@ -25,6 +25,17 @@ service cloud.firestore {
           == request.auth.uid;
     }
 
+    function paymentWindowOpen(groupId, roundId) {
+      let round = get(
+        /databases/$(database)/documents/groups/$(groupId)/rounds/$(roundId)
+      ).data;
+      return !('opensAt' in round)
+        || (round.opensAt is timestamp
+          && round.closesAt is timestamp
+          && request.time >= round.opensAt
+          && request.time < round.closesAt);
+    }
+
     function validMember(data, groupId, memberId) {
       return data.keys().hasAll(['userId', 'groupId', 'joinedAt'])
         && data.keys().hasOnly(['userId', 'groupId', 'joinedAt', 'displayName'])
@@ -116,6 +127,7 @@ service cloud.firestore {
           && request.resource.data.memberId == request.auth.uid
           && request.resource.data.status == 'declare'
           && exists(/databases/$(database)/documents/groups/$(groupId)/rounds/$(request.resource.data.roundId))
+          && paymentWindowOpen(groupId, request.resource.data.roundId)
           && get(/databases/$(database)/documents/groups/$(groupId)/rounds/$(request.resource.data.roundId)).data.groupId
             == groupId;
         allow update: if isMember(groupId)

@@ -292,20 +292,7 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen> {
             label: 'Membres',
             value: '${widget.group.memberIds.length}',
           ),
-          if (isOwner) ...[
-            const SizedBox(height: 8),
-            FilledButton.icon(
-              onPressed: _isCreatingInvite ? null : _createInvite,
-              icon: _isCreatingInvite
-                  ? const SizedBox.square(
-                      dimension: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.person_add_alt_1),
-              label: const Text('Inviter'),
-            ),
-          ],
-          if (isOwner && widget.group.memberIds.length >= 2)
+          if (isOwner)
             StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
               stream: FirebaseFirestore.instance
                   .collection('groups')
@@ -326,22 +313,42 @@ class _GroupDetailsScreenState extends State<GroupDetailsScreen> {
                     child: Center(child: CircularProgressIndicator()),
                   );
                 }
-                if (snapshot.data?.docs.isNotEmpty ?? false) {
-                  return const SizedBox.shrink();
-                }
+                final isLaunched = snapshot.data?.docs.isNotEmpty ?? false;
+                if (isLaunched) return const SizedBox.shrink();
 
-                return Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: FilledButton.icon(
-                    onPressed: _isStartingTontine ? null : _confirmStartTontine,
-                    icon: _isStartingTontine
-                        ? const SizedBox.square(
-                            dimension: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.play_arrow),
-                    label: const Text('Lancer la tontine'),
-                  ),
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const SizedBox(height: 8),
+                    FilledButton.icon(
+                      onPressed: _isCreatingInvite ? null : _createInvite,
+                      icon: _isCreatingInvite
+                          ? const SizedBox.square(
+                              dimension: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.person_add_alt_1),
+                      label: const Text('Inviter'),
+                    ),
+                    if (widget.group.memberIds.length >= 2)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: FilledButton.icon(
+                          onPressed: _isStartingTontine
+                              ? null
+                              : _confirmStartTontine,
+                          icon: _isStartingTontine
+                              ? const SizedBox.square(
+                                  dimension: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.play_arrow),
+                          label: const Text('Lancer la tontine'),
+                        ),
+                      ),
+                  ],
                 );
               },
             ),
